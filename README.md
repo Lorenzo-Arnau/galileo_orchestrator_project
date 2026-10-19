@@ -34,7 +34,7 @@ macchina abbastanza potente — Ollama in locale, Galileo offre un assistente AI
 - **Generare immagini** gratis con Cloudflare Flux
 - **Cercare nel workspace** — trova file per nome o contenuto
 
-Non richiede abbonamenti, non manda i tuoi dati a server proprietari se usi Ollama,
+Non richiede abbonamenti, non manda i tuoi dati a server proprietari se usi modelli locali con Ollama,
 e funziona con un doppio clic su Windows grazie all'exe precompilato.
 
 È uno strumento per chi vuole **fare cose concrete con l'AI senza spendere soldi**.
@@ -75,7 +75,7 @@ Gratuito con limiti generosi. Galileo prova i modelli configurati in ordine:
 
 ```python
 # in galileo_server.py
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]  # provati in sequenza
+GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # provati in sequenza
 ```
 
 Ottieni la chiave su [aistudio.google.com](https://aistudio.google.com/app/apikey).
@@ -90,8 +90,8 @@ OPENROUTER_MODEL = "openrouter/free"   # oppure es. "meta-llama/llama-3.1-8b-ins
 
 Registrati su [openrouter.ai](https://openrouter.ai) → crea una chiave gratuita.
 
-#### 3. Ollama — fallback finale (completamente locale, offline)
-Ollama fa girare modelli LLM direttamente sul tuo PC, senza inviare dati a nessun server.
+#### 3. Ollama — fallback finale (locale)
+Ollama fa girare modelli LLM direttamente sul tuo PC. Se usi modelli locali, i dati non vengono inviati a nessun server.
 È il fallback definitivo: funziona anche senza connessione internet.
 
 **Installazione Ollama:**
@@ -241,7 +241,7 @@ By chaining the generous **free tiers** of Google AI Studio (Gemini), OpenRouter
 - **Generating images** for free via Cloudflare Flux & Pollinations
 - **Searching workspaces** — quickly find files or code by query
 
-No subscriptions, no vendor lock-in, complete privacy when running Ollama offline, and a user-friendly double-click launch on Windows thanks to the pre-packaged app launcher.
+No subscriptions, no vendor lock-in, complete privacy when running local models with Ollama, and a user-friendly double-click launch on Windows thanks to the pre-packaged app launcher.
 
 ---
 
@@ -277,7 +277,8 @@ opened natively via a Windows launcher (`pywebview`).
 Free with generous limits. Galileo tries the configured models in order:
 
 ```python
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+# in galileo_server.py
+GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 ```
 
 Get your key at [aistudio.google.com](https://aistudio.google.com/app/apikey).
@@ -292,7 +293,7 @@ OPENROUTER_MODEL = "openrouter/free"
 
 Sign up at [openrouter.ai](https://openrouter.ai).
 
-#### 3. Ollama — final fallback (fully local, offline)
+#### 3. Ollama — final fallback (local)
 Runs LLM models directly on your machine — no data sent anywhere.
 Works without an internet connection.
 
