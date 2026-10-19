@@ -251,7 +251,7 @@ def tool_search_workspace(query):
             break
     return "\n".join(hits) or "Nessun risultato"
 
-WRITE_RE = re.compile(r"WRITE_FILE:\s*path=(\S+)\s*<<<\n(.*?)\n>>>", re.DOTALL)
+WRITE_RE = re.compile(r"WRITE_FILE:\s*path=(.+?)\s*<<<\n(.*?)\n>>>", re.DOTALL)
 IMAGE_RE = re.compile(r"GENERATE_IMAGE:\s*<<<\n(.*?)\n>>>", re.DOTALL)
 READ_RE = re.compile(r"READ_FILE:\s*path=(.+)")
 LIST_RE = re.compile(r"LIST_DIR:\s*path=(.+)")
@@ -308,7 +308,7 @@ def _ext(data):
     return "jpg" if data[:2] == b"\xff\xd8" else "png"
 
 def img_cloudflare(prompt):
-    if "INCOLLA_QUI" in CF_ACCOUNT_ID + CF_API_TOKEN:
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
         raise Exception("credenziali Cloudflare non configurate")
     r = requests.post(
         f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}",
@@ -465,6 +465,15 @@ def serve_video(filename):
     return send_from_directory(VIDEOS_DIR, filename)
 
 # --- LOGICA DI CHIAMATA PROVIDER (TESTO) ---
+COOLDOWN = {}  # nome provider -> timestamp fino a cui saltarlo
+
+def provider_enabled(name):
+    if name == "Gemini":
+        return bool(GEMINI_KEY)
+    if name == "OpenRouter":
+        return bool(OPENROUTER_KEY)
+    return True
+
 def check(r):
     if r.status_code != 200:
         raise Exception(f"{r.status_code}: {r.text[:300]}")
@@ -522,9 +531,12 @@ PROVIDERS = [
 ]
 
 def cascade(messages):
-    """Prova i provider in ordine. Restituisce (nome, testo)."""
+    """Prova i provider in ordine, saltando quelli senza chiave o in pausa."""
     chars_in = sum(len(str(m.get("content", ""))) for m in messages)
-    for name, fn in PROVIDERS:
+    candidates = [(n, f) for n, f in PROVIDERS if provider_enabled(n)]
+    now = time.time()
+    ready = [(n, f) for n, f in candidates if COOLDOWN.get(n, 0) <= now]
+    for name, fn in (ready or candidates):  # se sono tutti in pausa, riprova comunque
         try:
             print(f"Tento {name}...", end=" ", flush=True)
             res = fn(messages)
@@ -533,6 +545,7 @@ def cascade(messages):
             return name, res
         except Exception as e:
             stat(name, False, chars_in, 0)
+            COOLDOWN[name] = time.time() + (300 if "429" in str(e) else 30)
             print(f"❌ {name}: {e}")
     raise Exception("Tutti i provider hanno fallito")
 
@@ -653,7 +666,7 @@ def chat_completions():
             return reply("Video", start_video(last_text[5:].strip()))
         
         # 4) Comando diretto /caveman <descrizione>
-        if last_text.lower().startswith("/caveman "):
+        if last_text.lower().strip() == "/caveman" or last_text.lower().startswith("/caveman "):
             return reply("Caveman", toggle_caveman())
 
     messages = [{"role": "system", "content": system_prompt(caveman)}] + messages
