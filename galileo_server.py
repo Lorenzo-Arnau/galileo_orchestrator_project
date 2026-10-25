@@ -20,16 +20,43 @@ if sys.platform == "win32":
     if sys.stderr and hasattr(sys.stderr, 'buffer'):
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
+def _load_env():
+    # Cerca galileo.env accanto all'exe, nella cartella dello script o nella cartella corrente
+    for base in [
+        os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else "",
+        os.path.dirname(os.path.abspath(__file__)),
+        os.getcwd(),
+    ]:
+        if not base:
+            continue
+        p = os.path.join(base, "galileo.env")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+            break
+
+_load_env()
+
 app = Flask(__name__)
 # --- CONFIGURAZIONE ---
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_WORKSPACE_ID = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
-ANTHROPIC_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5"]  # provati in ordine
+ANTHROPIC_MODELS = [
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-latest",
+]  # provati in ordine
 CLAUDE_MAX_TOKENS = 4096
 GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # provati in ordine
 OPENROUTER_MODEL = "openrouter/free"
@@ -493,15 +520,19 @@ def call_claude(messages):
     if system_text:
         body["system"] = system_text
 
+    headers = {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    if ANTHROPIC_WORKSPACE_ID:
+        headers["anthropic-workspace-id"] = ANTHROPIC_WORKSPACE_ID
+
     last_error = None
     for model in ANTHROPIC_MODELS:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
+            headers=headers,
             json={**body, "model": model},
             timeout=120,
         )
