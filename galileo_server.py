@@ -23,11 +23,14 @@ if sys.platform == "win32":
 app = Flask(__name__)
 # --- CONFIGURAZIONE ---
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
+ANTHROPIC_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5"]  # provati in ordine
+CLAUDE_MAX_TOKENS = 4096
 GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # provati in ordine
 OPENROUTER_MODEL = "openrouter/free"
 OLLAMA_MODEL = "gemma4:31b-cloud"
@@ -468,6 +471,8 @@ def serve_video(filename):
 COOLDOWN = {}  # nome provider -> timestamp fino a cui saltarlo
 
 def provider_enabled(name):
+    if name == "Claude":
+        return bool(ANTHROPIC_KEY)
     if name == "Gemini":
         return bool(GEMINI_KEY)
     if name == "OpenRouter":
@@ -478,6 +483,35 @@ def check(r):
     if r.status_code != 200:
         raise Exception(f"{r.status_code}: {r.text[:300]}")
     return r.json()
+
+def call_claude(messages):
+    system_text = "\n".join(m["content"] for m in messages if m["role"] == "system")
+    chat = [{"role": m["role"], "content": m["content"]}
+            for m in messages if m["role"] in ("user", "assistant")]
+    body = {"max_tokens": CLAUDE_MAX_TOKENS, "messages": chat}
+    if system_text:
+        body["system"] = system_text
+
+    last_error = None
+    for model in ANTHROPIC_MODELS:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={**body, "model": model},
+            timeout=120,
+        )
+        if r.status_code == 200:
+            return "".join(b.get("text", "") for b in r.json()["content"]
+                           if b.get("type") == "text")
+        last_error = f"{model} -> {r.status_code}: {r.text[:200]}"
+        print(f"\n   (Claude {model} fallito: {last_error})")
+        if r.status_code in (401, 403):  # chiave sbagliata: inutile provare l'altro modello
+            break
+    raise Exception(last_error)
 
 def call_gemini(messages):
     system_text = "\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -525,15 +559,45 @@ def call_ollama(messages):
     return check(r)["message"]["content"]
 
 PROVIDERS = [
+    ("Claude", call_claude),
     ("Gemini", call_gemini),
     ("OpenRouter", call_openrouter),
     ("Ollama", call_ollama),
 ]
 
-def cascade(messages):
-    """Prova i provider in ordine, saltando quelli senza chiave o in pausa."""
+# --- ROUTING A LIVELLI ---
+CLAUDE_AS_LAST_RESORT = True   # se tutti i gratuiti falliscono, prova comunque Claude
+HEAVY_MIN_CHARS = 1500
+HEAVY_KEYWORDS = (
+    "codice", "code", "debug", "bug", "traceback", "refactor", "architettur",
+    "analizz", "analisi", "ottimizz", "implement", "algoritm", "sql", "regex",
+    "leggiti", "revisiona", "review",
+)
+HEAVY_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in HEAVY_KEYWORDS) + r")")
+PATH_RE = re.compile(r"\b[a-z]:[\\/]|/users/|/home/")  # percorso di un progetto sul PC
+
+def classify(text):
+    """Restituisce 'heavy' o 'light' in base a regole semplici."""
+    t = text.lower()
+    if t.lstrip().startswith("### task:"):  # richieste di servizio di Open WebUI (titoli, tag)
+        return "light"
+    if "```" in text or len(text) > HEAVY_MIN_CHARS:
+        return "heavy"
+    if PATH_RE.search(t) or HEAVY_RE.search(t):
+        return "heavy"
+    return "light"
+
+def providers_for(tier):
+    claude = [p for p in PROVIDERS if p[0] == "Claude"]
+    free = [p for p in PROVIDERS if p[0] != "Claude"]
+    if tier == "heavy":
+        return claude + free
+    return free + (claude if CLAUDE_AS_LAST_RESORT else [])
+
+def cascade(messages, tier="light"):
+    """Prova i provider del livello richiesto, saltando quelli senza chiave o in pausa."""
     chars_in = sum(len(str(m.get("content", ""))) for m in messages)
-    candidates = [(n, f) for n, f in PROVIDERS if provider_enabled(n)]
+    candidates = [(n, f) for n, f in providers_for(tier) if provider_enabled(n)]
     now = time.time()
     ready = [(n, f) for n, f in candidates if COOLDOWN.get(n, 0) <= now]
     for name, fn in (ready or candidates):  # se sono tutti in pausa, riprova comunque
@@ -575,10 +639,10 @@ def reply(name, text):
     })
 
 # --- CICLO AGENTE ---
-def run_agent(messages):
+def run_agent(messages, tier="light"):
     name = "Galileo"
     for _ in range(MAX_TOOL_STEPS):
-        name, res = cascade(prune(messages))
+        name, res = cascade(prune(messages), tier)
 
         match = WRITE_RE.search(res)
         if match:
@@ -640,38 +704,59 @@ def chat_completions():
     last = messages[-1]
     last_text = last["content"] if isinstance(last.get("content"), str) else ""
     caveman = CAVEMAN_MODE
+    is_user = last.get("role") == "user"
 
-    # /full <domanda>: risposta per esteso solo per questo messaggio
-    if last.get("role") == "user" and last_text.lower().startswith("/full "):
+    # --- PREFISSI CHE CAMBIANO IL COMPORTAMENTO (tolti dal testo prima di inoltrarlo) ---
+    tier = None
+    changed = False
+
+    # /full <domanda>: risposta per esteso, solo per questo messaggio
+    if is_user and last_text.lower().startswith("/full "):
         caveman = False
-        last_text = last_text[6:]
+        last_text = last_text[len("/full "):]
+        changed = True
+
+    # /claude <domanda> forza il livello pesante, /free <domanda> quello leggero
+    if is_user:
+        for prefix, forced in (("/claude ", "heavy"), ("/free ", "light")):
+            if last_text.lower().startswith(prefix):
+                tier = forced
+                last_text = last_text[len(prefix):]
+                changed = True
+                break
+
+    # aggiorna l'ultimo messaggio solo se è stato tolto un prefisso
+    if changed:
         messages = messages[:-1] + [{**last, "content": last_text}]
 
-    print(f"Request: {last_text[:50]}...")
+    print(f"Request [{tier}]: {last_text[:50]}...")
 
-    if last.get("role") == "user":
-        # 1) Risposta a una proposta di scrittura?
+    # --- COMANDI DIRETTI (non passano dai modelli di testo) ---
+    if is_user:
+        # 1) Risposta a una proposta di scrittura (ok / no)?
         outcome = handle_confirmation(last_text)
         if outcome:
             print("✅ Conferma gestita")
             return reply("Galileo", outcome)
 
-        # 2) Comando diretto /img <descrizione>
+        # 2) /img <descrizione>
         if last_text.lower().startswith("/img "):
             name, text = image_reply(last_text[5:].strip())
             return reply(name, text)
 
-        # 3) Comando diretto /vid <descrizione>
+        # 3) /vid <descrizione>
         if last_text.lower().startswith("/vid "):
             return reply("Video", start_video(last_text[5:].strip()))
-        
-        # 4) Comando diretto /caveman <descrizione>
+
+        # 4) /caveman (attiva o disattiva lo stile telegrafico)
         if last_text.lower().strip() == "/caveman" or last_text.lower().startswith("/caveman "):
             return reply("Caveman", toggle_caveman())
 
+    # --- RICHIESTA NORMALE: la gestisce il ciclo agente ---
+    stat(f"Tier:{tier}", True)  # conta solo le richieste vere nella dashboard
     messages = [{"role": "system", "content": system_prompt(caveman)}] + messages
     try:
-        return run_agent(messages)
+        return run_agent(messages, tier)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
