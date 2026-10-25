@@ -4,8 +4,7 @@
 
 **[IT](#italiano)** | **[EN](#english)**
 
-Un orchestratore agentico che combina API LLM gratuite in cascata,
-con frontend Open WebUI e packaging nativo per Windows.
+Un orchestratore agentico a due livelli che combina i tier gratuiti di Gemini, OpenRouter e Ollama con Claude per i compiti complessi, con frontend Open WebUI e packaging Windows.
 
 </div>
 
@@ -14,132 +13,118 @@ con frontend Open WebUI e packaging nativo per Windows.
 <a name="italiano"></a>
 ## Italiano
 
-### Perché esiste questo progetto
+### Perche esiste questo progetto
 
-Gli strumenti AI più potenti per scrivere, leggere e implementare codice —
-Claude Code, Cursor, GitHub Copilot, Antigravity — costano tra i 20 e i 100 dollari al mese.
-Per chi impara a programmare, per chi lavora su progetti personali, per chi semplicemente
-non può o non vuole spendere quella cifra ogni mese, la barriera è reale.
+Gli strumenti AI commerciali per scrivere, leggere e implementare codice (come Claude Code, Cursor, GitHub Copilot) costano tra i 20 e i 100 dollari al mese. Per chi impara a programmare, lavora su progetti personali o vuole evitare costi fissi mensili, questa spesa rappresenta un ostacolo concreto.
 
-**Galileo nasce da questa idea semplice:**
-> *E se si potesse avere uno strumento simile, completamente gratuito, che gira sul tuo PC?*
+**Galileo nasce da una logica ibrida e sostenibile:**
+> *Usare in via prioritaria i tier gratuiti per la stragrande maggioranza dei task quotidiani, attivando modelli avanzati come Claude solo quando il compito richiede vero ragionamento architetturale o refactoring complesso.*
 
-Usando i **tier gratuiti** di Google AI Studio (Gemini), OpenRouter e — per chi ha una
-macchina abbastanza potente — Ollama in locale, Galileo offre un assistente AI capace di:
+Sfruttando i **tier gratuiti** di Google AI Studio (Gemini), OpenRouter e Ollama in locale, affiancati opzionalmente da **Anthropic Claude**, Galileo offre un assistente desktop capace di:
 
-- Conversare, spiegare, rispondere a domande tecniche e non
-- **Leggere i tuoi file e il tuo codice** — puoi indicargli una cartella di progetto
-  e lui la esplora, legge i file rilevanti e ti aiuta a capire cosa fa quel codice
-- **Scrivere e modificare file** — propone le modifiche e le applica solo dopo la tua conferma
-- **Generare immagini** gratis con Cloudflare Flux
-- **Cercare nel workspace** — trova file per nome o contenuto
+- Conversare, spiegare concetti e rispondere a domande tecniche
+- **Leggere codice e progetti sul PC** (`LIST_DIR`, `READ_FILE`): esplora cartelle locali, analizza codice esistente e ne spiega il funzionamento
+- **Scrivere e modificare file** (`WRITE_FILE`): propone modifiche con anteprima e scrive solo dopo esplicita conferma dell'utente (ok / no)
+- **Generare immagini** (`GENERATE_IMAGE`): generazione gratuita tramite Cloudflare Flux e Pollinations
+- **Cercare nel workspace** (`SEARCH_WORKSPACE`): ricerca rapida per nome file o contenuto
+- **Protezione automatica segreti**: rifiuta la lettura di file sensibili (.env, .pem, .key, credentials)
 
-Non richiede abbonamenti, non manda i tuoi dati a server proprietari se usi modelli locali con Ollama,
-e funziona con un doppio clic su Windows grazie all'exe precompilato.
-
-È uno strumento per chi vuole **fare cose concrete con l'AI senza spendere soldi**.
+Non richiede abbonamenti obbligatori, garantisce la privacy offline se si usa Ollama, e include un launcher desktop Windows con controllo porte e gestione errori.
 
 ---
 
-### Cos'è Galileo (tecnico)
+### Routing intelligente a due livelli (Light vs Heavy)
 
-Galileo è un server Flask che espone un'API compatibile OpenAI (`/v1/chat/completions`)
-e orchestra in cascata più provider LLM gratuiti:
+Galileo analizza automaticamente ogni richiesta in ingresso assegnandola al livello corretto:
 
 ```
-Gemini  →  OpenRouter (tier gratuito)  →  Ollama (locale)
+[Richiesta Utente]
+        |
+        v
+  Classificatore
+  /            \
+(Light)        (Heavy)
+  |              |
+  v              v
+Tier Gratuito   Tier Avanzato (Claude)
+(Gemini/OR/Oll) (Fallback sui gratuiti)
 ```
 
-Se il primo provider fallisce (quota esaurita, errore di rete, chiave non configurata),
-passa automaticamente al successivo — senza che l'utente debba fare nulla.
-Il frontend è [Open WebUI](https://github.com/open-webui/open-webui), aperto nativamente
-tramite un launcher Windows (`pywebview`).
+1. **Livello Light (Leggero):**
+   - Richieste brevi, spiegazioni, chiacchiere generali, link/URL.
+   - Richieste di servizio interne di Open WebUI (`### Task:` per la generazione automatica di titoli e tag delle chat).
+   - Ordine di chiamata: **Gemini -> OpenRouter -> Ollama** (Claude solo come estrema risorsa se tutto fallisce).
+   - Obiettivo: zero costi di token per le operazioni di routine.
 
-**Funzionalità principali:**
-- Cascata automatica tra provider (failover trasparente)
-- `LIST_DIR` — elenca i file di qualsiasi cartella del PC (percorso assoluto)
-- `READ_FILE` — legge file locali; protegge automaticamente `.env`, `.key`, `.pem`
-- `SEARCH_WORKSPACE` — cerca nel workspace per nome file o contenuto
-- `WRITE_FILE` — propone scrittura di file con conferma utente
-- `GENERATE_IMAGE` — Cloudflare Flux → Pollinations (cascata)
-- `GENERATE_VIDEO` — Hugging Face Space ZeroGPU (sperimentale/instabile)
-- Dashboard statistiche su `/dashboard`
-- Modalità Caveman con `/caveman`
+2. **Livello Heavy (Pesante):**
+   - Riconoscimento automatico di: blocchi di codice (```), percorsi locali di progetto (`C:\Users\...`, `/home/...`), prompt lunghi (> 1500 caratteri), parole chiave tecniche (debug, refactor, architettura, traceback, regex, sql, implementa, ecc.).
+   - Ordine di chiamata: **Claude (Sonnet / Haiku) -> Gemini -> OpenRouter -> Ollama**.
+   - Obiettivo: massima qualita di ragionamento e precisione nella scrittura di codice.
+
+3. **Override manuale via chat:**
+   - `/claude <richiesta>`: forza il livello Heavy (Claude prioritario).
+   - `/free <richiesta>`: forza il livello Light (provider gratuiti prioritari).
+   - `/full <richiesta>`: genera una risposta completa per esteso (disattiva temporaneamente la modalita Caveman).
+   - `/caveman`: attiva o disattiva le risposte telegrafiche essenziali.
+   - `/img <descrizione>`: genera un'immagine con Cloudflare Flux o Pollinations.
+   - `/vid <descrizione>`: genera un video tramite Hugging Face Space ZeroGPU (sperimentale).
 
 ---
 
-### La cascata in dettaglio
+### I provider della cascata
 
-#### 1. Gemini (Google AI Studio) — provider principale
-Gratuito con limiti generosi. Galileo prova i modelli configurati in ordine:
-
+#### 1. Claude (Anthropic) - Livello Heavy
+Riservato a compiti complessi, analisi di progetti e refactoring. Modelli configurati:
 ```python
-# in galileo_server.py
-GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # provati in sequenza
+ANTHROPIC_MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5"]
 ```
+Richiede una chiave API su [console.anthropic.com](https://console.anthropic.com/). Se non configurata, Galileo passa direttamente ai provider gratuiti senza errori.
 
-Ottieni la chiave su [aistudio.google.com](https://aistudio.google.com/app/apikey).
-
-#### 2. OpenRouter — primo fallback (cloud, gratuito)
-Aggrega decine di modelli open-source con un unico endpoint.
-Il modello `openrouter/free` seleziona automaticamente tra quelli senza costo.
-
+#### 2. Gemini (Google AI Studio) - Provider gratuito principale
+Tier gratuito con rate limit generosi:
 ```python
-OPENROUTER_MODEL = "openrouter/free"   # oppure es. "meta-llama/llama-3.1-8b-instruct:free"
+GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 ```
+Ottieni la chiave gratuita su [aistudio.google.com](https://aistudio.google.com/app/apikey).
 
-Registrati su [openrouter.ai](https://openrouter.ai) → crea una chiave gratuita.
+#### 3. OpenRouter - Primo fallback cloud (gratuito)
+Aggrega decine di modelli open-source senza costi tramite il router automatico:
+```python
+OPENROUTER_MODEL = "openrouter/free"
+```
+Registrati su [openrouter.ai](https://openrouter.ai) e crea una chiave gratuita.
 
-#### 3. Ollama — fallback finale (locale)
-Ollama fa girare modelli LLM direttamente sul tuo PC. Se usi modelli locali, i dati non vengono inviati a nessun server.
-È il fallback definitivo: funziona anche senza connessione internet.
+#### 4. Ollama - Fallback locale definitivo (offline)
+Esegue modelli open-source sul tuo hardware senza inviare dati all'esterno:
+```python
+OLLAMA_MODEL = "gemma4:31b-cloud"  # oppure es. llama3.2:3b
+OLLAMA_URL = "http://localhost:11434/api/chat"
+```
 
 **Installazione Ollama:**
+- Windows / macOS: scarica l'installer da [ollama.ai/download](https://ollama.ai/download)
+- Linux: `curl -fsSL https://ollama.ai/install.sh | sh`
 
+**Modelli consigliati in base all'hardware:**
 ```bash
-# Windows / macOS: scarica l'installer da
-# https://ollama.ai/download
-
-# Linux:
-curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull llama3.2:3b      # ~2.0 GB - CPU, qualsiasi PC
+ollama pull gemma2:2b        # ~1.6 GB - leggero e veloce
+ollama pull llama3.1:8b      # ~4.7 GB - consigliato con GPU dedicata
 ```
 
-**Scaricare un modello** (esempi, scegli in base alla VRAM disponibile):
+---
 
-```bash
-ollama pull gemma2:2b        # ~1.6 GB  — CPU, qualsiasi PC
-ollama pull llama3.2:3b      # ~2.0 GB  — CPU, qualsiasi PC
-ollama pull llama3.1:8b      # ~4.7 GB  — consigliato con GPU
-ollama pull qwen2.5:14b      # ~8.9 GB  — buona GPU richiesta
-ollama pull gemma2:27b       # ~16 GB   — GPU high-end
-```
+### Cooldown automatico dei provider
 
-**Verificare che sia attivo** (Ollama avvia automaticamente un server su porta 11434):
-
-```bash
-ollama list          # mostra i modelli scaricati
-curl http://localhost:11434/api/tags   # risponde con JSON se il server è su
-```
-
-**Configurare il modello in Galileo:**
-
-```python
-# in galileo_server.py — scegli il modello che hai scaricato
-OLLAMA_MODEL = "llama3.2:3b"           # modello locale
-OLLAMA_URL   = "http://localhost:11434/api/chat"  # non cambiare
-```
-
-> **Nota:** Se Ollama non è installato o il modello non è disponibile, Galileo
-> mostrerà un errore solo su questo provider e non ne avrà altri da tentare.
-> È buona pratica avere almeno un modello piccolo (es. `gemma2:2b`) come rete di sicurezza.
+Quando un provider restituisce un errore (limite di quota, timeout o errore di rete), Galileo imposta automaticamente un periodo di **cooldown** per quel servizio. Durante questo intervallo, le richieste successive saltano direttamente il provider temporaneamente indisponibile, evitando rallentamenti nell'esecuzione dei tool agentici.
 
 ---
 
 ### Requisiti
 
 - Python 3.10+
-- [Open WebUI](https://github.com/open-webui/open-webui) su `localhost:3000`
-- Almeno una chiave API tra Gemini e OpenRouter **oppure** Ollama installato localmente
+- [Open WebUI](https://github.com/open-webui/open-webui) in esecuzione su `localhost:3000`
+- Almeno una chiave API (Gemini o OpenRouter) o Ollama in locale
 
 ```bash
 pip install flask requests pywebview
@@ -150,39 +135,37 @@ pip install gradio_client   # opzionale, solo per /vid
 
 ### Configurazione
 
-1. **Copia il template delle chiavi:**
+1. **Copia il file di configurazione:**
    ```bash
    copy galileo.env.example galileo.env   # Windows
-   cp galileo.env.example galileo.env     # Linux/Mac
+   cp galileo.env.example galileo.env     # Linux / Mac
    ```
 
-2. **Apri `galileo.env` e incolla le tue chiavi** (vedi commenti nel file).
-   Puoi lasciare vuote le chiavi dei provider che non usi — Galileo salterà quel provider.
-
-3. **`galileo.env` non va mai committato** — è già in `.gitignore`.
+2. **Compila `galileo.env` con le tue chiavi:**
+   - `GEMINI_API_KEY`: chiave principale per i task gratuiti.
+   - `ANTHROPIC_API_KEY`: facoltativa, per attivare Claude nei compiti complessi.
+   - `OPENROUTER_API_KEY`: facoltativa, per il fallback cloud.
+   - `CLOUDFLARE_ACCOUNT_ID` e `CLOUDFLARE_API_TOKEN`: per immagini Flux.
+   - `galileo.env` e' escluso da `.gitignore` e resta sempre privato sul tuo PC.
 
 ---
 
 ### Avvio
 
 ```bash
-# 1. Avvia Open WebUI
+# 1. Avvia Open WebUI (via Docker)
 docker run -p 3000:8080 ghcr.io/open-webui/open-webui:main
 
-# 2. (Opzionale) Avvia Ollama se vuoi il fallback locale
-ollama serve   # di solito parte automaticamente come servizio
-
-# 3. Lancia Galileo
+# 2. Avvia Galileo
 python galileo_app.py
 ```
 
 Il launcher:
-- Legge `galileo.env` dalla stessa cartella
-- Avvia Flask su `http://127.0.0.1:5000`
-- Attende Open WebUI su `http://localhost:3000` (fino a 60 s)
-- Apre la finestra nativa
-
-Se non parte, controlla **`galileo_launch.log`** (stesso folder dell'exe/script).
+- Carica le variabili da `galileo.env` accanto al file eseguibile.
+- Verifica la disponibilita della porta 5000 prima di avviare Flask.
+- Attende la risposta di Open WebUI su `http://localhost:3000`.
+- Apre la finestra desktop nativa (pywebview).
+- In caso di errore, apre una finestra diagnostica mostrando le ultime 25 righe di `galileo_launch.log`.
 
 ---
 
@@ -193,32 +176,7 @@ pip install pyinstaller
 pyinstaller galileo_app.spec
 ```
 
-L'exe finisce in `dist/`. Metti `galileo.env` **nella stessa cartella** dell'exe.
-
-> Se `/vid` non funziona dall'exe:
-> ```bash
-> pyinstaller galileo_app.spec --collect-all gradio_client
-> ```
-
----
-
-### Struttura del progetto
-
-```
-galileo_app.py          ← Launcher (pywebview + caricamento galileo.env)
-galileo_server.py       ← Server Flask + logica agente + tools
-galileo_router.py       ← Router provider (opzionale)
-galileo_app.spec        ← Configurazione PyInstaller
-galileo.env.example     ← Template chiavi API (compilare e rinominare in galileo.env)
-galileo.env             ← Chiavi reali (NON nel repo, escluso da .gitignore)
-galileo_workspace/      ← Workspace agente: immagini, video, file generati
-```
-
----
-
-### Licenza
-
-MIT — usa, modifica, distribuisci liberamente.
+L'eseguibile verra' generato in `dist/`. Copia il tuo file `galileo.env` nella stessa cartella dell'eseguibile `galileo_app.exe`.
 
 ---
 
@@ -227,151 +185,82 @@ MIT — usa, modifica, distribuisci liberamente.
 
 ### Why this project exists
 
-The most powerful AI coding assistants — Claude Code, Cursor, GitHub Copilot, Antigravity — often cost between $20 and $100 per month.
-For learners, hobbyists, students, or anyone who cannot or does not want to pay recurring monthly subscriptions, this creates an unnecessary barrier to entry.
+Commercial AI coding assistants (Claude Code, Cursor, Copilot) require monthly subscriptions between $20 and $100. For students, hobbyists, and developers working on personal projects, this recurring fee creates an avoidable barrier.
 
-**Galileo was born from a simple premise:**
-> *What if you could have a capable, agentic AI assistant running locally on your PC, completely free of charge?*
+**Galileo implements a practical hybrid strategy:**
+> *Rely on generous free tiers for routine queries, explanations, and lightweight tasks, while seamlessly routing to Claude when a task genuinely demands complex architectural reasoning, debugging, or multi-file refactoring.*
 
-By chaining the generous **free tiers** of Google AI Studio (Gemini), OpenRouter, and (optionally) local offline LLMs via Ollama, Galileo gives you an agent capable of:
+By leveraging **free tiers** from Google AI Studio (Gemini), OpenRouter, and local offline models via Ollama, with optional support for **Anthropic Claude**, Galileo provides a self-hosted desktop assistant capable of:
 
-- Conversing, explaining concepts, and answering technical questions
-- **Reading your workspace and codebases** — point it to a project directory and it will inspect folders, read relevant files, and explain how things work
-- **Writing and editing files** — proposes changes with safe diffs and writes only after explicit user confirmation
-- **Generating images** for free via Cloudflare Flux & Pollinations
-- **Searching workspaces** — quickly find files or code by query
-
-No subscriptions, no vendor lock-in, complete privacy when running local models with Ollama, and a user-friendly double-click launch on Windows thanks to the pre-packaged app launcher.
+- Conversational explanations and technical Q&A
+- **Inspecting local projects and codebases** (`LIST_DIR`, `READ_FILE`): navigates PC directories, reads source code, and summarizes architectures
+- **Safely proposing file modifications** (`WRITE_FILE`): generates previews and only writes upon explicit user approval (ok / no)
+- **Generating images** (`GENERATE_IMAGE`): free image generation via Cloudflare Flux and Pollinations
+- **Searching workspaces** (`SEARCH_WORKSPACE`): quick search by filename or text content
+- **Automatic credential protection**: refuses to read sensitive files (.env, .pem, .key, credentials)
 
 ---
 
-### What is Galileo (Technical overview)
+### Two-tier intelligent routing (Light vs Heavy)
 
-Galileo is a Flask server exposing an OpenAI-compatible API (`/v1/chat/completions`)
-that orchestrates multiple free LLM providers in an automatic cascade:
+Every incoming request is automatically evaluated by a lightweight classifier:
 
 ```
-Gemini  →  OpenRouter (free tier)  →  Ollama (local, offline)
+[User Request]
+       |
+       v
+   Classifier
+   /        \
+(Light)     (Heavy)
+   |           |
+   v           v
+Free Cascade  Advanced Tier (Claude)
+(Gemini/OR)   (Failover to free tiers)
 ```
 
-If one provider fails (quota exhausted, network error, missing key), it silently
-falls over to the next. The frontend is [Open WebUI](https://github.com/open-webui/open-webui),
-opened natively via a Windows launcher (`pywebview`).
+1. **Light Tier:**
+   - Everyday questions, conceptual explanations, URLs/documentation links.
+   - Open WebUI internal task calls (`### Task:` service prompts for automatic chat title and tag generation).
+   - Call order: **Gemini -> OpenRouter -> Ollama** (Claude only as last resort if enabled).
+   - Keeps token expenses at zero for standard usage.
 
-**Key features:**
-- Automatic provider cascade (transparent failover)
-- `LIST_DIR` — list files in any local folder (absolute path)
-- `READ_FILE` — read local files; auto-protects `.env`/`.key`/`.pem`
-- `SEARCH_WORKSPACE` — search workspace by filename or content
-- `WRITE_FILE` — proposes file writes requiring user confirmation
-- `GENERATE_IMAGE` — Cloudflare Flux → Pollinations (cascade)
-- `GENERATE_VIDEO` — Hugging Face Space ZeroGPU (experimental)
-- Live stats dashboard at `/dashboard`
-- Caveman mode (terse responses) via `/caveman`
+2. **Heavy Tier:**
+   - Triggered by: code fences (```), local project file paths (`C:\Users\...`, `/home/...`), large inputs (> 1500 chars), and technical keywords (debug, refactor, architecture, traceback, sql, regex, etc.).
+   - Call order: **Claude (Sonnet / Haiku) -> Gemini -> OpenRouter -> Ollama**.
+   - Ensures high reasoning quality on programming tasks.
+
+3. **Manual Chat Commands:**
+   - `/claude <prompt>`: force Heavy tier (Claude prioritized).
+   - `/free <prompt>`: force Light tier (free providers prioritized).
+   - `/full <prompt>`: request full verbose response (temporarily disables Caveman style).
+   - `/caveman`: toggle terse telegraphic responses.
+   - `/img <prompt>`: generate image via Cloudflare / Pollinations.
+   - `/vid <prompt>`: experimental video generation via Hugging Face Space ZeroGPU.
 
 ---
 
-### The cascade explained
+### Provider Cascade & Cooldown
 
-#### 1. Gemini — primary provider
-Free with generous limits. Galileo tries the configured models in order:
-
-```python
-# in galileo_server.py
-GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
-```
-
-Get your key at [aistudio.google.com](https://aistudio.google.com/app/apikey).
-
-#### 2. OpenRouter — first fallback (cloud, free)
-Aggregates dozens of open-source models under a single endpoint.
-`openrouter/free` auto-selects from available no-cost models.
-
-```python
-OPENROUTER_MODEL = "openrouter/free"
-```
-
-Sign up at [openrouter.ai](https://openrouter.ai).
-
-#### 3. Ollama — final fallback (local)
-Runs LLM models directly on your machine — no data sent anywhere.
-Works without an internet connection.
-
-**Install Ollama:**
-
-```bash
-# Windows / macOS: download from https://ollama.ai/download
-# Linux:
-curl -fsSL https://ollama.ai/install.sh | sh
-```
-
-**Pull a model** (pick based on your available VRAM):
-
-```bash
-ollama pull gemma2:2b       # ~1.6 GB — runs on CPU, any machine
-ollama pull llama3.2:3b     # ~2.0 GB — runs on CPU, any machine
-ollama pull llama3.1:8b     # ~4.7 GB — recommended with GPU
-ollama pull qwen2.5:14b     # ~8.9 GB — good GPU required
-```
-
-**Check it's running:**
-
-```bash
-ollama list                              # shows downloaded models
-curl http://localhost:11434/api/tags    # returns JSON if server is up
-```
-
-**Configure the model in Galileo:**
-
-```python
-# galileo_server.py
-OLLAMA_MODEL = "llama3.2:3b"
-OLLAMA_URL   = "http://localhost:11434/api/chat"
-```
+- **Claude (Anthropic)**: Configured with `claude-sonnet-5-5` and `claude-haiku-5-5`. Requires `ANTHROPIC_API_KEY`. If unconfigured, automatically skipped.
+- **Gemini (Google AI Studio)**: Primary free provider (`gemini-3.5-flash-lite`, `gemini-3.8-flash`).
+- **OpenRouter**: Free cloud fallback routing across open-source models (`openrouter/free`).
+- **Ollama**: Local offline fallback (`localhost:11434`).
+- **Automatic Cooldown**: Any provider encountering rate limits or connection errors is placed on temporary cooldown to prevent blocking multi-step agent actions.
 
 ---
 
-### Requirements
-
-- Python 3.10+
-- [Open WebUI](https://github.com/open-webui/open-webui) on `localhost:3000`
-- At least one of: a Gemini/OpenRouter key **or** Ollama installed locally
+### Quick Start
 
 ```bash
-pip install flask requests pywebview
-pip install gradio_client   # optional, only for /vid
-```
-
----
-
-### Quick start
-
-```bash
-# 1. Copy and fill in your API keys
-copy galileo.env.example galileo.env   # Windows
-cp galileo.env.example galileo.env     # Linux/Mac
+# 1. Copy template and configure keys
+copy galileo.env.example galileo.env
 
 # 2. Start Open WebUI
 docker run -p 3000:8080 ghcr.io/open-webui/open-webui:main
 
-# 3. (Optional) Start Ollama for local fallback
-ollama serve
-
-# 4. Launch Galileo
+# 3. Launch Galileo
 python galileo_app.py
 ```
-
----
-
-### Build (Windows EXE)
-
-```bash
-pip install pyinstaller
-pyinstaller galileo_app.spec
-# Place galileo.env next to the generated exe in dist/
-```
-
----
 
 ### License
 
